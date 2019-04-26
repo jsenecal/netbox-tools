@@ -1,2 +1,0 @@
-class PayloadException(Exception):
-   pass

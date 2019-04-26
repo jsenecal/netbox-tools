@@ -2,7 +2,7 @@ import requests
 
 import logging
 
-from . import PayloadException
+from .exceptions import PayloadException, ARINException
 
 
 logger = logging.getLogger(__name__)
@@ -30,10 +30,10 @@ class Arin:
         """
         try:
             if method not in ["GET", "POST", "DELETE", "PUT"]:
-                raise PayloadException("Invalid method specified")
+                raise ARINException("Invalid method specified")
 
             if return_type not in ["json", "html", "plain", "xml"]:
-                raise PayloadException("Invalid return type specified")
+                raise ARINException("Invalid return type specified")
 
             headers = {'Content-Type': 'application/xml'}
 
@@ -56,14 +56,14 @@ class Arin:
                 request = requests.delete("https://www.arin.net/rest%s?apikey=%s" % (resource, self.apikey), headers=headers)
 
             if request.status_code is not 200:
-                raise Exception("Server returned error code %s: %s" % (request.status_code, request.text))
+                raise ARINException("Server returned error code %s: %s" % (request.status_code, request.text))
 
             return request.text
             #if return_type is "json":
             #    return request.json().replace('\\"', "\"")
             #else:
             #    return request.text
-        except Exception as ex:
+        except ARINException as ex:
             logger.error("_api_query(%s) exception: %s" % (resource, ex))
             return False
 
@@ -204,7 +204,7 @@ class Arin:
 
     def get_customer(self, customer_handle):
         """Get Customer
-            https://www.arin.net/resources/restfulmethods.html#customers
+            https://www.arin.net/resources/manage/regrws/methods/#get-customer-information
         Parameters
             customer_handle: str customer handle
         Returns
@@ -214,7 +214,7 @@ class Arin:
 
     def delete_customer(self, customer_handle):
         """Delete Customer
-            https://www.arin.net/resources/restfulmethods.html#customers
+            https://www.arin.net/resources/manage/regrws/methods/#delete-customer
         Parameters
             customer_handle: str customer handle
         Returns
@@ -224,7 +224,7 @@ class Arin:
 
     def modify_customer(self, customer_handle, customer_payload):
         """Modify Customer
-            https://www.arin.net/resources/restfulmethods.html#customers
+            https://www.arin.net/resources/manage/regrws/methods/#modify-customer
         Parameters
             customer_handle: str customer handle
             customer_payload: str xml customer payload
