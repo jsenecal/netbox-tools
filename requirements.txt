@@ -3,4 +3,4 @@ Click
 click-log
 requests
 pynetbox
-bcrypt
+cryptography
