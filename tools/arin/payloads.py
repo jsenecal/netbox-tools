@@ -1,4 +1,4 @@
-from . import PayloadException
+from .exceptions import PayloadException
 
 class DelegationKeyPayload:
     """ Delegation Key Payload"""
