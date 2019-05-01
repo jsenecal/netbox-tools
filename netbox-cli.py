@@ -34,6 +34,23 @@ class ContextObject:
         self.ctx = ctx
         self.secret = None
         self.fernet = None
+        self._netbox = None
+
+        config['netbox'] = {
+            'uri': '',
+            'private_key_file': '',
+            'token': ''
+        }
+
+        config['global'] = {
+            'secret': '',
+        }
+
+        try:
+            with resources.user.open('config.ini', mode='r') as configFile:
+                config.read_file(configFile)
+        except IOError:
+            pass
 
     def validate_secret(self):
         if not self.secret:
@@ -59,12 +76,42 @@ class ContextObject:
 
     @property
     def netbox_token(self):
-        return self.decrypt(config['netbox']['token'])
+        return self.decrypt(config['netbox']['token']).decode()
 
     @netbox_token.setter
     def netbox_token(self, value):
-        config['netbox']['token'] = obj.encrypt(token).decode()
+        config['netbox']['token'] = self.encrypt(value).decode()
         write_config()
+
+    @property
+    def netbox_uri(self):
+        return config['netbox']['uri']
+
+    @netbox_uri.setter
+    def netbox_uri(self, value):
+        config['netbox']['uri'] = value
+        write_config()
+
+    @property
+    def netbox_private_key_file(self):
+        return config['netbox']['private_key_file']
+
+    @netbox_private_key_file.setter
+    def netbox_private_key_file(self, value):
+        config['netbox']['private_key_file'] = value
+        write_config()
+
+    @property
+    def netbox(self):
+        if self._netbox is None:
+            logger.debug('netbox context object is not defined')
+            self._netbox = pynetbox.api(
+                self.netbox_uri,
+                token=self.netbox_token,
+                private_key_file=self.netbox_private_key_file
+            )
+        return self._netbox
+
 
 class OptionPromptNull(click.Option):
     _value_key = '_default_val'
@@ -103,26 +150,11 @@ class AliasedGroup(click.Group):
 @click.command(cls=AliasedGroup)
 @click.option('--secret', help='Secret key to encrypt sensible data with',
               envvar='CONFIG_SECRET', show_envvar=True)
+@click_log.simple_verbosity_option(logger)
 @click.pass_context
 def cli(ctx, secret):
     ctx.obj = ContextObject(ctx)
     ctx.obj.secret = secret
-
-    config['netbox'] = {
-        'uri': '',
-        'private_key_file': '',
-        'token': ''
-    }
-
-    config['global'] = {
-        'secret': '',
-    }
-
-    try:
-        with resources.user.open('config.ini', mode='r') as configFile:
-            config.read_file(configFile)
-    except IOError:
-        pass
 
     if ctx.obj.secret:
         try:
@@ -131,6 +163,22 @@ def cli(ctx, secret):
             logger.error("The secret key is not in Base64 format")
             ctx.exit(401)
 
+# arin
+@cli.command(name='arin', cls=AliasedGroup)
+def arin():
+    pass
+
+# arin reassign
+@arin.command(name='reassign', cls=AliasedGroup)
+def arin_reassign():
+    pass
+
+
+@arin_reassign.command(name='simple')
+@click.option('--aggregate_id', required=False)
+@click.pass_obj
+def arin_reassign_simple(obj, aggregate_id):
+    click.echo(obj.netbox.ipam.aggregates.all())
 
 # config
 @cli.command(name='config', cls=AliasedGroup)
@@ -167,17 +215,18 @@ def config_get(obj):
 
 
 @config_get.command(name='netbox-uri')
-def get_netbox_uri():
-    if config['netbox']['uri']:
-        click.echo(config['netbox']['uri'])
+def get_netbox_uri(obj):
+    if obj.netbox_uri:
+        click.echo(obj.netbox_uri)
     else:
         click.echo("NOT SET")
 
 
 @config_get.command(name='netbox-private-key-file')
-def get_netbox_private_key_file():
-    if config['netbox']['private_key_file']:
-        click.echo(config['netbox']['private_key_file'])
+@click.pass_obj
+def get_netbox_private_key_file(obj):
+    if obj.netbox_private_key_file:
+        click.echo(obj.netbox_private_key_file)
     else:
         click.echo("NOT SET")
 
@@ -199,17 +248,17 @@ def config_set(obj):
 
 @config_set.command(name='netbox-uri')
 @click.argument('value')
-def set_netbox_uri(value):
-    config['netbox']['uri'] = value
-    write_config()
+@click.pass_obj
+def set_netbox_uri(obj, value):
+    obj.netbox_uri = value
     click.echo('netbox-uri set to: {}'.format(config['netbox']['uri']))
 
 
 @config_set.command(name='netbox-private-key-file')
 @click.argument('file', type=click.Path(exists=True))
-def set_netbox_private_key_file(file):
-    config['netbox']['private_key_file'] = file
-    write_config()
+@click.pass_obj
+def set_netbox_private_key_file(obj, file):
+    obj.netbox_private_key_file = file
     click.echo(
         'netbox-private-key-file set to: {}'.format(config['netbox']['private_key_file']))
 
@@ -223,4 +272,7 @@ def set_netbox_token(obj):
 
 
 if __name__ == '__main__':
-    cli(auto_envvar_prefix='NETBOX_CLI')
+    try:
+        cli(auto_envvar_prefix='NETBOX_CLI')
+    except pynetbox.core.query.RequestError as e:
+        logger.debug(e)
