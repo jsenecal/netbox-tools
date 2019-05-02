@@ -173,12 +173,52 @@ def arin():
 def arin_reassign():
     pass
 
-
+# arin reassign simple
 @arin_reassign.command(name='simple')
-@click.option('--aggregate_id', required=False)
+@click.option('-a', '--aggregate_id', required=False)
+@click.option('-p', '--prefix_id', required=False)
+@click.option('-r', '--replace_existing', is_flag=True)
 @click.pass_obj
-def arin_reassign_simple(obj, aggregate_id):
-    click.echo(obj.netbox.ipam.aggregates.all())
+def arin_reassign_simple(obj, aggregate_id, prefix_id, replace_existing):
+    if aggregate_id and prefix_id:
+        click.echo(
+            "Either '--aggregate_id' or '--prefix_id' must be specified, not both\n"
+        )
+        ctx = click.get_current_context()
+        click.echo(ctx.get_help())
+        ctx.exit(1)
+
+    if aggregate_id is None and prefix_id is None:
+        aggregates = obj.netbox.ipam.aggregates.all()
+        choices = [str(aggregate.id) for aggregate in aggregates]
+
+        for aggregate in aggregates:
+            aid = str(aggregate.id)
+            click.echo("[{aid}]: {aggregate}".format(
+                aggregate=aggregate,
+                aid=aid.rjust(4-len(aid)))
+            )
+        choice = click.prompt(
+            "Reassign subnets in which aggregate?",
+            type=click.Choice(choices)
+        )
+        aggregate_id = int(choice)
+        
+    if aggregate_id and prefix_id is None:
+        aggregate = obj.netbox.ipam.aggregates.get(aggregate_id)
+        prefixes = obj.netbox.ipam.prefixes.filter(within_include=aggregate)
+        for prefix in prefixes:
+            if not replace_existing and prefix.custom_fields['RIR NET Handle']:
+                logger.debug(
+                    "%s already has an RIR NET Handle, skipping" % prefix)
+                continue
+            # Query the hyperlinked endpoints
+            prefix.tenant.full_details()
+            prefix.site.full_details()
+            tenant = prefix.tenant.full_details()
+            site = prefix.site
+            import ipdb
+            ipdb.set_trace()
 
 # config
 @cli.command(name='config', cls=AliasedGroup)
@@ -271,6 +311,7 @@ def set_netbox_token(obj):
     click.echo('netbox-token set')
 
 
+# pylint: disable=no-value-for-parameter,unexpected-keyword-arg
 if __name__ == '__main__':
     try:
         cli(auto_envvar_prefix='NETBOX_CLI')
