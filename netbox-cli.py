@@ -42,6 +42,12 @@ class ContextObject:
             'token': ''
         }
 
+        config['arin'] = {
+            'uri': '',
+            'token': '',
+            'parent_org_handle': ''
+        }
+
         config['global'] = {
             'secret': '',
         }
@@ -99,6 +105,33 @@ class ContextObject:
     @netbox_private_key_file.setter
     def netbox_private_key_file(self, value):
         config['netbox']['private_key_file'] = value
+        write_config()
+
+    @property
+    def arin_token(self):
+        return self.decrypt(config['arin']['token']).decode()
+
+    @arin_token.setter
+    def arin_token(self, value):
+        config['arin']['token'] = self.encrypt(value).decode()
+        write_config()
+
+    @property
+    def arin_uri(self):
+        return config['arin']['uri']
+
+    @arin_uri.setter
+    def arin_uri(self, value):
+        config['arin']['uri'] = value
+        write_config()
+
+    @property
+    def arin_parent_org_handle(self):
+        return config['arin']['parent_org_handle']
+
+    @arin_parent_org_handle.setter
+    def arin_parent_org_handle(self, value):
+        config['arin']['parent_org_handle'] = value
         write_config()
 
     @property
@@ -178,13 +211,13 @@ def arin_reassign():
 @click.option('-a', '--aggregate_id', required=False)
 @click.option('-p', '--prefix_id', required=False)
 @click.option('-r', '--replace_existing', is_flag=True)
-@click.pass_obj
-def arin_reassign_simple(obj, aggregate_id, prefix_id, replace_existing):
+@click.pass_context
+def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existing=False):
+    obj = ctx.obj
     if aggregate_id and prefix_id:
         click.echo(
             "Either '--aggregate_id' or '--prefix_id' must be specified, not both\n"
         )
-        ctx = click.get_current_context()
         click.echo(ctx.get_help())
         ctx.exit(1)
 
@@ -212,13 +245,33 @@ def arin_reassign_simple(obj, aggregate_id, prefix_id, replace_existing):
                 logger.debug(
                     "%s already has an RIR NET Handle, skipping" % prefix)
                 continue
-            # Query the hyperlinked endpoints
-            prefix.tenant.full_details()
-            prefix.site.full_details()
-            tenant = prefix.tenant.full_details()
-            site = prefix.site
-            import ipdb
-            ipdb.set_trace()
+
+            ctx.invoke(arin_reassign_simple, prefix_id=prefix.id, replace_existing=replace_existing)
+
+    if prefix_id and not aggregate_id:
+        # Get the prefix
+        prefix=obj.netbox.ipam.prefixes.get(prefix_id)
+        # Query the hyperlinked endpoints
+        prefix.tenant.full_details()
+        prefix.site.full_details()
+        prefix.tenant.full_details()
+        site = prefix.site
+        tenant = prefix.tenant
+
+        logger.info("Processing {prefix}@{site} for {tenant}".format(
+            prefix=prefix,
+            site=site,
+            tenant=tenant
+        ))
+
+
+        if not replace_existing and prefix.custom_fields['RIR NET Handle']:
+            logger.debug(
+                "%s already has an RIR NET Handle, skipping" % prefix)
+            return
+        # Build ARIN Cust Payload
+    import ipdb
+    ipdb.set_trace()
 
 # config
 @cli.command(name='config', cls=AliasedGroup)
@@ -279,6 +332,31 @@ def get_netbox_token(obj):
     else:
         click.echo("NOT SET")
 
+@config_get.command(name='arin-uri')
+def get_arin_uri(obj):
+    if obj.arin_uri:
+        click.echo(obj.arin_uri)
+    else:
+        click.echo("NOT SET")
+
+
+@config_get.command(name='arin-parent-org-handle')
+@click.pass_obj
+def get_arin_parent_org_handle(obj):
+    if obj.arin_private_key_file:
+        click.echo(obj.arin_private_key_file)
+    else:
+        click.echo("NOT SET")
+
+
+@config_get.command(name='arin-token')
+@click.pass_obj
+def get_arin_token(obj):
+    if obj.arin_token:
+        click.echo(obj.arin_token)
+    else:
+        click.echo("NOT SET")
+
 # config set
 @configuration.command(name='set', cls=AliasedGroup)
 @click.pass_obj
@@ -309,6 +387,30 @@ def set_netbox_token(obj):
     token = click.prompt('Token')
     obj.netbox_token = token
     click.echo('netbox-token set')
+
+@config_set.command(name='arin-uri')
+@click.argument('value')
+@click.pass_obj
+def set_arin_uri(obj, value):
+    obj.arin_uri = value
+    click.echo('arin-uri set to: {}'.format(config['arin']['uri']))
+
+
+@config_set.command(name='arin-parent-org-handle')
+@click.argument('file', type=click.Path(exists=True))
+@click.pass_obj
+def set_arin_parent_org_handle(obj, file):
+    obj.arin_private_key_file = file
+    click.echo(
+        'arin-parent-org-handle set to: {}'.format(config['arin']['parent_org_handle']))
+
+
+@config_set.command(name='arin-token')
+@click.pass_obj
+def set_arin_token(obj):
+    token = click.prompt('Token')
+    obj.arin_token = token
+    click.echo('arin-token set')
 
 
 # pylint: disable=no-value-for-parameter,unexpected-keyword-arg
