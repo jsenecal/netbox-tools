@@ -1,6 +1,7 @@
 import requests
 
 import logging
+import unicodedata
 
 from .exceptions import PayloadException, ARINException
 
@@ -28,6 +29,10 @@ class Arin:
         Returns
             response: api response
         """
+
+        # Normalize payload to replace any non-ascii chars to their ascii equivalent.
+        payload = unicodedata.normalize('NFKD', payload).encode('ascii','ignore')
+
         try:
             if method not in ["GET", "POST", "DELETE", "PUT"]:
                 raise ARINException("Invalid method specified")
@@ -429,7 +434,7 @@ class Arin:
         Returns
             CustomerPayload - https://www.arin.net/resources/restfulpayloads.html#customer
         """
-        return self._api_query("/net/%s/customer" % parent_net_handle, "%s" % customer_payload)
+        return self._api_query("/net/%s/customer" % parent_net_handle, str(customer_payload), method='POST')
 
     def reassign_net(self, parent_net_handle, net_payload):
         """Reassign Net
