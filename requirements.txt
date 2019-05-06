@@ -4,3 +4,5 @@ click-log
 requests
 pynetbox
 cryptography
+googlemaps
+pycountry

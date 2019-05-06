@@ -3,6 +3,7 @@
 from cryptography.fernet import Fernet, InvalidToken
 from clint import resources
 import binascii
+import base64
 import click
 import click_log
 import os
@@ -12,12 +13,13 @@ import click
 import pynetbox
 import json
 import logging
+from tools.arin.payloads import CustomerPayload
+from tools.arin import Arin
+from tools.googlemaps import GeocodeResult
+
 logger = logging.getLogger(__name__)
 click_log.basic_config(logger)
-
-
 resources.init('connectit', 'netbox-cli')
-
 config = configparser.ConfigParser()
 
 
@@ -35,6 +37,8 @@ class ContextObject:
         self.secret = None
         self.fernet = None
         self._netbox = None
+        self._gmaps = None
+        self._arin = None
 
         config['netbox'] = {
             'uri': '',
@@ -43,9 +47,12 @@ class ContextObject:
         }
 
         config['arin'] = {
-            'uri': '',
-            'token': '',
-            'parent_org_handle': ''
+            'api_key': '',
+            'parent_org_handle': 'NACIN-1'
+        }
+
+        config['google'] = {
+            'api_key': '',
         }
 
         config['global'] = {
@@ -75,10 +82,18 @@ class ContextObject:
                 sys.exit(403)
 
     def decrypt(self, string):
-        return self.fernet.decrypt(string.encode())
+        if isinstance(string, str):
+            string = string.encode()
+        try:
+            return base64.urlsafe_b64decode(self.fernet.decrypt(string))
+        except InvalidToken:
+            return bytes()
+        
 
     def encrypt(self, string):
-        return self.fernet.encrypt(string.encode())
+        if isinstance(string, str):
+            string = string.encode()
+        return self.fernet.encrypt(base64.urlsafe_b64encode(string))
 
     @property
     def netbox_token(self):
@@ -108,12 +123,12 @@ class ContextObject:
         write_config()
 
     @property
-    def arin_token(self):
-        return self.decrypt(config['arin']['token']).decode()
+    def arin_api_key(self):
+        return self.decrypt(config['arin']['api_key']).decode()
 
-    @arin_token.setter
-    def arin_token(self, value):
-        config['arin']['token'] = self.encrypt(value).decode()
+    @arin_api_key.setter
+    def arin_api_key(self, value):
+        config['arin']['api_key'] = self.encrypt(value).decode()
         write_config()
 
     @property
@@ -135,15 +150,47 @@ class ContextObject:
         write_config()
 
     @property
+    def google_api_key(self):
+        return self.decrypt(config['google']['api_key']).decode()
+
+    @google_api_key.setter
+    def google_api_key(self, value):
+        config['google']['api_key'] = self.encrypt(value).decode()
+        write_config()
+
+    @property
     def netbox(self):
         if self._netbox is None:
-            logger.debug('netbox context object is not defined')
             self._netbox = pynetbox.api(
                 self.netbox_uri,
                 token=self.netbox_token,
                 private_key_file=self.netbox_private_key_file
             )
+            logger.debug('`netbox` context object initialized')
+        else:
+            logger.debug('`netbox` context object accessed')
         return self._netbox
+
+    @property
+    def gmaps(self):
+        if self._gmaps is None:
+            import googlemaps
+            self._gmaps = googlemaps.Client(key=self.google_api_key)
+            logger.debug('`gmaps` context object initialized')
+        else:
+            logger.debug('`gmaps` context object accessed')
+        return self._gmaps
+
+
+    @property
+    def arin(self):
+        if self._arin is None:
+            self._arin = Arin(apikey=self.arin_api_key)
+            logger.debug('`arin` context object initialized')
+        else:
+            logger.debug('`arin` context object accessed')
+        return self._arin
+
 
 
 class OptionPromptNull(click.Option):
@@ -198,8 +245,14 @@ def cli(ctx, secret):
 
 # arin
 @cli.command(name='arin', cls=AliasedGroup)
-def arin():
-    pass
+@click.pass_context
+def arin(ctx):
+    obj = ctx.obj
+    if not obj.netbox_uri and not obj.netbox_token:
+        click.echo(
+            "netbox config settings are not properly set\n"
+        )
+        ctx.exit(1)
 
 # arin reassign
 @arin.command(name='reassign', cls=AliasedGroup)
@@ -208,9 +261,9 @@ def arin_reassign():
 
 # arin reassign simple
 @arin_reassign.command(name='simple')
-@click.option('-a', '--aggregate_id', required=False)
-@click.option('-p', '--prefix_id', required=False)
-@click.option('-r', '--replace_existing', is_flag=True)
+@click.option('-a', '--aggregate-id', required=False)
+@click.option('-p', '--prefix-id', required=False)
+@click.option('-r', '--replace-existing', is_flag=True)
 @click.pass_context
 def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existing=False):
     obj = ctx.obj
@@ -236,25 +289,76 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
             type=click.Choice(choices)
         )
         aggregate_id = int(choice)
-        
+
     if aggregate_id and prefix_id is None:
         aggregate = obj.netbox.ipam.aggregates.get(aggregate_id)
         prefixes = obj.netbox.ipam.prefixes.filter(within_include=aggregate)
         for prefix in prefixes:
             if not replace_existing and prefix.custom_fields['RIR NET Handle']:
-                logger.debug(
+                logger.info(
                     "%s already has an RIR NET Handle, skipping" % prefix)
                 continue
 
-            ctx.invoke(arin_reassign_simple, prefix_id=prefix.id, replace_existing=replace_existing)
+            if not prefix.site:
+                logger.info(
+                    "%s has no site, skipping" % prefix
+                )
+                continue
+            if not prefix.tenant:
+                logger.info(
+                    "%s has no tenant, skipping" % prefix
+                )
+                continue
+            ctx.invoke(arin_reassign_simple, prefix_id=prefix.id,
+                       replace_existing=replace_existing)
 
     if prefix_id and not aggregate_id:
+        parent_org_handle = obj.arin_parent_org_handle
+
+        if not parent_org_handle:
+            logger.error(
+                "arin-parent-org-handle setting is not set, exitting"
+            )
+            ctx.exit(1)
+
         # Get the prefix
-        prefix=obj.netbox.ipam.prefixes.get(prefix_id)
+        prefix = obj.netbox.ipam.prefixes.get(prefix_id)
+
+        if not replace_existing and prefix.custom_fields['RIR NET Handle']:
+            logger.error(
+                "%s already has an RIR NET Handle, exitting" % prefix
+            )
+            ctx.exit(1)
+
+
+        # Get its aggregate
+        aggregate = obj.netbox.ipam.aggregates.get(q=prefix)
+
+        parent_net_handle = aggregate.custom_fields['RIR Handle']
+
+        if not parent_net_handle:
+            logger.error(
+                "Aggregate `%s` has no RIR Handle, exitting" % aggregate
+            )
+            ctx.exit(1)
+
         # Query the hyperlinked endpoints
-        prefix.tenant.full_details()
-        prefix.site.full_details()
-        prefix.tenant.full_details()
+        if prefix.tenant:
+            prefix.tenant.full_details()
+        else:
+            logger.error(
+                "%s has no tenant, exitting" % prefix
+            )
+            ctx.exit(1)
+        
+        if prefix.site:
+            prefix.site.full_details()
+        else:
+            logger.error(
+                "%s has no site, exitting" % prefix
+            )
+            ctx.exit(1)
+        
         site = prefix.site
         tenant = prefix.tenant
 
@@ -264,14 +368,36 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
             tenant=tenant
         ))
 
-
-        if not replace_existing and prefix.custom_fields['RIR NET Handle']:
+        if not replace_existing and site.custom_fields['RIR CUST Handle']:
             logger.debug(
-                "%s already has an RIR NET Handle, skipping" % prefix)
-            return
-        # Build ARIN Cust Payload
-    import ipdb
-    ipdb.set_trace()
+                "%s already has an RIR CUST Handle, skipping creation of the CUST object" % prefix)
+        else:
+            # Build ARIN Cust Payload
+            customer_name = tenant.name
+            geocode_result = GeocodeResult(
+                obj.gmaps.geocode(site.physical_address))
+            iso3166_1_name = geocode_result.iso3166_1.name
+            iso3166_1_code2 = geocode_result.iso3166_1.alpha_2
+            iso3166_1_code3 = geocode_result.iso3166_1.alpha_3
+            iso3166_1_e164 = geocode_result.iso3166_1.numeric
+            street_address = geocode_result.street_address
+            city = geocode_result.city
+            iso3166_2 = geocode_result.short_address_components['administrative_area_level_1']
+            postal_code = geocode_result.postal_code
+            comment = ""
+            private_customer = 'true'
+            
+            arin_customer_payload = CustomerPayload(customer_name, iso3166_1_name, iso3166_1_code2, iso3166_1_code3, iso3166_1_e164, street_address, city, iso3166_2, postal_code, comment, parent_org_handle, private_customer)
+
+
+            arin_customer = obj.arin.create_recipient_customer(parent_net_handle, arin_customer_payload)
+
+            # site.custom_fields['RIR CUST Handle']= arin_customer
+
+        import ipdb
+        ipdb.set_trace()
+
+        
 
 # config
 @cli.command(name='config', cls=AliasedGroup)
@@ -332,13 +458,6 @@ def get_netbox_token(obj):
     else:
         click.echo("NOT SET")
 
-@config_get.command(name='arin-uri')
-def get_arin_uri(obj):
-    if obj.arin_uri:
-        click.echo(obj.arin_uri)
-    else:
-        click.echo("NOT SET")
-
 
 @config_get.command(name='arin-parent-org-handle')
 @click.pass_obj
@@ -349,11 +468,20 @@ def get_arin_parent_org_handle(obj):
         click.echo("NOT SET")
 
 
-@config_get.command(name='arin-token')
+@config_get.command(name='arin-api-key')
 @click.pass_obj
-def get_arin_token(obj):
-    if obj.arin_token:
-        click.echo(obj.arin_token)
+def get_arin_api_key(obj):
+    if obj.arin_api_key:
+        click.echo(obj.arin_api_key)
+    else:
+        click.echo("NOT SET")
+
+
+@config_get.command(name='google-api-key')
+@click.pass_obj
+def get_google_api_key(obj):
+    if obj.google_api_key:
+        click.echo(obj.google_api_key)
     else:
         click.echo("NOT SET")
 
@@ -369,7 +497,7 @@ def config_set(obj):
 @click.pass_obj
 def set_netbox_uri(obj, value):
     obj.netbox_uri = value
-    click.echo('netbox-uri set to: {}'.format(config['netbox']['uri']))
+    click.echo('netbox-uri set to: {}'.format(obj.netbox_uri))
 
 
 @config_set.command(name='netbox-private-key-file')
@@ -378,7 +506,9 @@ def set_netbox_uri(obj, value):
 def set_netbox_private_key_file(obj, file):
     obj.netbox_private_key_file = file
     click.echo(
-        'netbox-private-key-file set to: {}'.format(config['netbox']['private_key_file']))
+        'netbox-private-key-file set to: {}'.format(
+            obj.netbox_private_key_file)
+    )
 
 
 @config_set.command(name='netbox-token')
@@ -388,29 +518,31 @@ def set_netbox_token(obj):
     obj.netbox_token = token
     click.echo('netbox-token set')
 
-@config_set.command(name='arin-uri')
-@click.argument('value')
-@click.pass_obj
-def set_arin_uri(obj, value):
-    obj.arin_uri = value
-    click.echo('arin-uri set to: {}'.format(config['arin']['uri']))
-
 
 @config_set.command(name='arin-parent-org-handle')
-@click.argument('file', type=click.Path(exists=True))
+@click.argument('value')
 @click.pass_obj
-def set_arin_parent_org_handle(obj, file):
-    obj.arin_private_key_file = file
+def set_arin_parent_org_handle(obj, value):
+    obj.arin_parent_org_handle = value
     click.echo(
-        'arin-parent-org-handle set to: {}'.format(config['arin']['parent_org_handle']))
+        'arin-parent-org-handle set to: {}'.format(obj.arin_parent_org_handle)
+    )
 
 
-@config_set.command(name='arin-token')
+@config_set.command(name='arin-api-key')
 @click.pass_obj
-def set_arin_token(obj):
-    token = click.prompt('Token')
-    obj.arin_token = token
-    click.echo('arin-token set')
+def set_arin_api_key(obj):
+    key = click.prompt('API Key')
+    obj.arin_api_key = key
+    click.echo('arin-api-key set')
+
+
+@config_set.command(name='google-api-key')
+@click.pass_obj
+def set_google_api_key(obj):
+    key = click.prompt('API Key')
+    obj.google_api_key = key
+    click.echo('google-api-key set')
 
 
 # pylint: disable=no-value-for-parameter,unexpected-keyword-arg
