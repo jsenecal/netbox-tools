@@ -64,10 +64,7 @@ class Arin:
                 raise ARINException("Server returned error code %s: %s" % (request.status_code, request.text))
 
             return request.text
-            #if return_type is "json":
-            #    return request.json().replace('\\"', "\"")
-            #else:
-            #    return request.text
+            
         except ARINException as ex:
             logger.error("_api_query(%s) exception: %s" % (resource, ex))
             return False

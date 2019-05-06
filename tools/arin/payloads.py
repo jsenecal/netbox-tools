@@ -1,6 +1,32 @@
 from .exceptions import PayloadException
+import untangle
 
-class CustomerPayload:
+
+class ArinPayload:
+
+    fields = ()
+
+    def from_xml(self, xml):
+        raise NotImplementedError
+
+    def parse_args(self, *args):
+        pos = 0
+        for field in self.fields:
+            try:
+                setattr(self, field, args[pos])
+            except IndexError:
+                setattr(self, field, "")
+            pos += 1
+    
+    def parse_kwargs(self, **kwargs):
+        for field in self.fields:
+            value = kwargs.get(field, "")
+            if getattr(self, field) is None:
+                setattr(self, field, value) 
+    
+    
+
+class CustomerPayload(ArinPayload):
     """
         Customer Payload 
 
@@ -23,21 +49,27 @@ class CustomerPayload:
         When performing a modify, if you include these fields with a different value from the original, omit them entirely, or leave them blank, it will return an error.
     """
 
-    def __init__(self, customer_name, iso3166_1_name, iso3166_1_code2, iso3166_1_code3, iso3166_1_e164, street_address, city, iso3166_2, postal_code, comment, parent_org_handle, private_customer, handle="", registration_date=""):
-        self.customer_name = customer_name
-        self.iso3166_1_name = iso3166_1_name
-        self.iso3166_1_code2 = iso3166_1_code2
-        self.iso3166_1_code3 = iso3166_1_code3
-        self.iso3166_1_e164 = iso3166_1_e164
-        self.street_address = street_address
-        self.city = city
-        self.iso3166_2 = iso3166_2
-        self.postal_code = postal_code
-        self.comment = comment
-        self.parent_org_handle = parent_org_handle
-        self.private_customer = private_customer
-        self.handle = handle
-        self.registration_date = registration_date
+    fields = [
+        'customer_name',
+        'iso3166_1_name',
+        'iso3166_1_code2',
+        'iso3166_1_code3',
+        'iso3166_1_e164',
+        'street_address',
+        'city', 
+        'iso3166_2',
+        'postal_code',
+        'comment',
+        'parent_org_handle',
+        'private_customer',
+        'handle',
+        'registration_date'
+    ]
+
+    def __init__(self, *args, **kwargs):
+        self.parse_args(*args)
+        self.parse_kwargs(**kwargs)
+        super().__init__()
 
     def __str__(self):
         return """<customer xmlns="http://www.arin.net/regrws/core/v1">
@@ -63,8 +95,31 @@ class CustomerPayload:
                 <privateCustomer>{private_customer}</privateCustomer>
             </customer>""".format(**self.__dict__)
 
+    @classmethod
+    def from_xml(cls, xml):
+        document = untangle.parse(xml)
+        payload = cls()
+        payload.customer_name = document.customer.customerName.cdata
+        payload.iso3166_1_name = document.customer.iso3166_1.name.cdata
+        payload.iso3166_1_code2 = document.customer.iso3166_1.code2.cdata
+        payload.iso3166_1_code3 = document.customer.iso3166_1.code3.cdata
+        payload.iso3166_1_e164 = document.customer.iso3166_1.name.cdata
+        payload.street_address = document.customer.streetAddress.line.cdata
+        payload.city = document.customer.city.cdata
+        payload.iso3166_2 = document.customer.iso3166_2.cdata
+        payload.postal_code = document.customer.postalCode.cdata
+        if hasattr(document.customer, 'comment'):
+            payload.comment = document.customer.comment.line.cdata
+        else:
+            payload.comment = ""
+        payload.parent_org_handle = document.customer.parentOrgHandle.cdata
+        payload.private_customer = document.customer.privateCustomer.cdata
+        payload.handle = document.customer.handle.cdata
+        payload.registration_date = document.customer.registrationDate.cdata
+        return payload
 
-class NetBlockPayload:
+
+class NetBlockPayload(ArinPayload):
     """Net Block Payload"""
 
     def __init__(self, net_type, description, startAddress, endAddress, cidrLength):
@@ -89,7 +144,7 @@ class NetBlockPayload:
             </netBlock>""" % (self.net_type, self.description, self.startAddress, self.endAddress, self.cidrLength)
 
 
-class NetPayload:
+class NetPayload(ArinPayload):
     """Net Payload"""
 
     def __init__(self, comment, orgHandle, customerHandle, parentNetHandle, netName, originAS, netBlocks):
