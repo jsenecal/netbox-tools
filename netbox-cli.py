@@ -88,7 +88,6 @@ class ContextObject:
             return base64.urlsafe_b64decode(self.fernet.decrypt(string))
         except InvalidToken:
             return bytes()
-        
 
     def encrypt(self, string):
         if isinstance(string, str):
@@ -181,7 +180,6 @@ class ContextObject:
             logger.debug('`gmaps` context object accessed')
         return self._gmaps
 
-
     @property
     def arin(self):
         if self._arin is None:
@@ -190,7 +188,6 @@ class ContextObject:
         else:
             logger.debug('`arin` context object accessed')
         return self._arin
-
 
 
 class OptionPromptNull(click.Option):
@@ -330,7 +327,6 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
             )
             ctx.exit(1)
 
-
         # Get its aggregate
         aggregate = obj.netbox.ipam.aggregates.get(q=prefix)
 
@@ -350,16 +346,15 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
                 "%s has no tenant, exitting" % prefix
             )
             ctx.exit(1)
-        
+
         if prefix.site:
-            prefix.site.full_details()
+            site = obj.netbox.dcim.sites.get(prefix.site.id)
         else:
             logger.error(
                 "%s has no site, exitting" % prefix
             )
             ctx.exit(1)
-        
-        site = prefix.site
+
         tenant = prefix.tenant
 
         logger.info("Processing {prefix}@{site} for {tenant}".format(
@@ -386,18 +381,23 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
             postal_code = geocode_result.postal_code
             comment = ""
             private_customer = 'true'
-            
-            arin_customer_payload = CustomerPayload(customer_name, iso3166_1_name, iso3166_1_code2, iso3166_1_code3, iso3166_1_e164, street_address, city, iso3166_2, postal_code, comment, parent_org_handle, private_customer)
 
+            arin_customer_payload = CustomerPayload(customer_name, iso3166_1_name, iso3166_1_code2, iso3166_1_code3,
+                                                    iso3166_1_e164, street_address, city, iso3166_2, postal_code, comment, parent_org_handle, private_customer)
 
-            arin_customer = obj.arin.create_recipient_customer(parent_net_handle, arin_customer_payload)
+            arin_customer_response = obj.arin.create_recipient_customer(
+                parent_net_handle, arin_customer_payload
+            )
 
-            # site.custom_fields['RIR CUST Handle']= arin_customer
+            arin_customer_response_payload = CustomerPayload.from_xml(
+                str(arin_customer_response)
+            )
+            site.custom_fields['RIR CUST Handle'] = arin_customer_response_payload.handle
+            site.custom_fields['RIR registration date'] = arin_customer_response_payload.registration_date
+            site.save()
+            import ipdb
+            ipdb.set_trace()
 
-        import ipdb
-        ipdb.set_trace()
-
-        
 
 # config
 @cli.command(name='config', cls=AliasedGroup)
