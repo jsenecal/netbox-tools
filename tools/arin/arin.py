@@ -9,7 +9,7 @@ from .exceptions import PayloadException, ARINException
 logger = logging.getLogger(__name__)
 
 class Arin:
-    def __init__(self, apikey):
+    def __init__(self, apikey, uri='https://www.ote.arin.net/'):
         """Constructor
         Parameters
             apikey: str arin apikey
@@ -17,6 +17,7 @@ class Arin:
             None
         """
         self.apikey = apikey
+        self.uri = uri
 
     def _api_query(self, resource, payload=None, method="GET", return_type="xml"):
         """Query ARIN API
@@ -52,13 +53,13 @@ class Arin:
                 headers.update({'Accept': 'application/xml'})
 
             if method is "GET":
-                request = requests.get("https://www.arin.net/rest%s?apikey=%s" % (resource, self.apikey), headers=headers)
+                request = requests.get("%srest%s?apikey=%s" % (self.uri, resource, self.apikey), headers=headers)
             elif method is "POST":
-                request = requests.post("https://www.arin.net/rest%s?apikey=%s" % (resource, self.apikey), data=payload, headers=headers)
+                request = requests.post("%srest%s?apikey=%s" % (self.uri, resource, self.apikey), data=payload, headers=headers)
             elif method is "PUT":
-                request = requests.put("https://www.arin.net/rest%s?apikey=%s" % (resource, self.apikey), data=payload, headers=headers)
+                request = requests.put("%srest%s?apikey=%s" % (self.uri, resource, self.apikey), data=payload, headers=headers)
             elif method is "DELETE":
-                request = requests.delete("https://www.arin.net/rest%s?apikey=%s" % (resource, self.apikey), headers=headers)
+                request = requests.delete("%srest%s?apikey=%s" % (self.uri, resource, self.apikey), headers=headers)
 
             if request.status_code is not 200:
                 raise ARINException("Server returned error code %s: %s" % (request.status_code, request.text))
@@ -431,11 +432,11 @@ class Arin:
         Returns
             CustomerPayload - https://www.arin.net/resources/restfulpayloads.html#customer
         """
-        return self._api_query("/net/%s/customer" % parent_net_handle, str(customer_payload), method='POST')
+        return self._api_query("/net/%s/customer" % parent_net_handle, str(customer_payload), 'POST')
 
     def reassign_net(self, parent_net_handle, net_payload):
         """Reassign Net
-            https://www.arin.net/resources/restfulmethods.html#nets
+            https://www.arin.net/resources/manage/regrws/methods/#reassign-net
         Parameters
             parent_net_handle: str parent net handle
             net_payload: str xml net payload

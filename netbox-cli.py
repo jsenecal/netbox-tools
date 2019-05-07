@@ -9,13 +9,14 @@ import click_log
 import os
 import sys
 import configparser
-import click
+import ipaddress
 import pynetbox
 import json
 import logging
-from tools.arin.payloads import CustomerPayload
+from tools.arin.payloads import CustomerPayload, NetPayload, NetBlockPayload, TicketedRequestPayload
 from tools.arin import Arin
 from tools.googlemaps import GeocodeResult
+from tools.googlemaps.googlemaps import GeocodeResultError
 
 logger = logging.getLogger(__name__)
 click_log.basic_config(logger)
@@ -48,7 +49,9 @@ class ContextObject:
 
         config['arin'] = {
             'api_key': '',
-            'parent_org_handle': 'NACIN-1'
+            'parent_org_handle': '',
+            'uri': 'https://www.ote.arin.net/',
+            'origin_ases': ''
         }
 
         config['google'] = {
@@ -140,6 +143,15 @@ class ContextObject:
         write_config()
 
     @property
+    def arin_origin_ases(self):
+        return config['arin']['origin_ases'].split(',')
+
+    @arin_origin_ases.setter
+    def arin_origin_ases(self, value):
+        config['arin']['origin_ases'] = value
+        write_config()
+
+    @property
     def arin_parent_org_handle(self):
         return config['arin']['parent_org_handle']
 
@@ -183,7 +195,7 @@ class ContextObject:
     @property
     def arin(self):
         if self._arin is None:
-            self._arin = Arin(apikey=self.arin_api_key)
+            self._arin = Arin(apikey=self.arin_api_key, uri=self.arin_uri)
             logger.debug('`arin` context object initialized')
         else:
             logger.debug('`arin` context object accessed')
@@ -291,9 +303,9 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
         aggregate = obj.netbox.ipam.aggregates.get(aggregate_id)
         prefixes = obj.netbox.ipam.prefixes.filter(within_include=aggregate)
         for prefix in prefixes:
-            if not replace_existing and prefix.custom_fields['RIR NET Handle']:
+            if not replace_existing and prefix.custom_fields['RIR Handle']:
                 logger.info(
-                    "%s already has an RIR NET Handle, skipping" % prefix)
+                    "%s already has an RIR Handle, skipping" % prefix)
                 continue
 
             if not prefix.site:
@@ -321,9 +333,9 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
         # Get the prefix
         prefix = obj.netbox.ipam.prefixes.get(prefix_id)
 
-        if not replace_existing and prefix.custom_fields['RIR NET Handle']:
+        if not replace_existing and prefix.custom_fields['RIR Handle']:
             logger.error(
-                "%s already has an RIR NET Handle, exitting" % prefix
+                "%s already has an RIR Handle, exitting" % prefix
             )
             ctx.exit(1)
 
@@ -363,40 +375,74 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
             tenant=tenant
         ))
 
-        if not replace_existing and site.custom_fields['RIR CUST Handle']:
-            logger.debug(
-                "%s already has an RIR CUST Handle, skipping creation of the CUST object" % prefix)
-        else:
-            # Build ARIN Cust Payload
-            customer_name = tenant.name
-            geocode_result = GeocodeResult(
-                obj.gmaps.geocode(site.physical_address))
-            iso3166_1_name = geocode_result.iso3166_1.name
-            iso3166_1_code2 = geocode_result.iso3166_1.alpha_2
-            iso3166_1_code3 = geocode_result.iso3166_1.alpha_3
-            iso3166_1_e164 = geocode_result.iso3166_1.numeric
-            street_address = geocode_result.street_address
-            city = geocode_result.city
-            iso3166_2 = geocode_result.short_address_components['administrative_area_level_1']
-            postal_code = geocode_result.postal_code
-            comment = ""
-            private_customer = 'true'
+        # Build ARIN Cust Payload
+        customer_name = tenant.name
+        geocode_result = GeocodeResult(
+            obj.gmaps.geocode(site.physical_address))
 
-            arin_customer_payload = CustomerPayload(customer_name, iso3166_1_name, iso3166_1_code2, iso3166_1_code3,
-                                                    iso3166_1_e164, street_address, city, iso3166_2, postal_code, comment, parent_org_handle, private_customer)
+        iso3166_1_name = geocode_result.iso3166_1.name
+        iso3166_1_code2 = geocode_result.iso3166_1.alpha_2
+        iso3166_1_code3 = geocode_result.iso3166_1.alpha_3
+        iso3166_1_e164 = geocode_result.iso3166_1.numeric
+        street_address = geocode_result.street_address
+        city = geocode_result.city
+        iso3166_2 = geocode_result.short_address_components['administrative_area_level_1']
+        postal_code = geocode_result.postal_code
+        comment = ""
+        private_customer = 'true'
 
-            arin_customer_response = obj.arin.create_recipient_customer(
-                parent_net_handle, arin_customer_payload
-            )
+        arin_customer_payload = CustomerPayload(customer_name, iso3166_1_name, iso3166_1_code2, iso3166_1_code3,
+                                                iso3166_1_e164, street_address, city, iso3166_2, postal_code, comment, parent_org_handle, private_customer)
 
+        arin_customer_response = obj.arin.create_recipient_customer(
+            parent_net_handle, arin_customer_payload
+        )
+
+        if arin_customer_response:
             arin_customer_response_payload = CustomerPayload.from_xml(
                 str(arin_customer_response)
             )
-            site.custom_fields['RIR CUST Handle'] = arin_customer_response_payload.handle
-            site.custom_fields['RIR registration date'] = arin_customer_response_payload.registration_date
-            site.save()
-            import ipdb
-            ipdb.set_trace()
+            if not replace_existing and prefix.custom_fields['RIR Handle']:
+                logger.debug(
+                    "%s already has an RIR Handle, skipping creation of the NET object" % prefix)
+            else:
+                ip_network = ipaddress.ip_network(prefix.prefix)
+
+                # Build ARIN NetBlock Payload
+                arin_netblock_payload = NetBlockPayload(start_address=ip_network.network_address,
+                                                        description=prefix.role.name,
+                                                        cidr_length=ip_network.prefixlen)
+
+                net_name = "CUST-%s-%s" % (
+                    prefix.family, "-".join(
+                        str(ip_network.network_address).split('.')
+                    )
+                )
+
+                # Build ARIN Net Payload
+                arin_net_payload = NetPayload(version=prefix.family.value,
+                                              comment=None,
+                                              parent_net_handle=parent_net_handle,
+                                              net_name=net_name,
+                                              origin_ases=obj.arin_origin_ases,
+                                              net_blocks=[
+                                                  arin_netblock_payload],
+                                              handle=None,
+                                              registration_date=None,
+                                              customer_handle=arin_customer_response_payload.handle,
+                                              poc_links=None)
+
+                arin_net_response = obj.arin.reassign_net(
+                    parent_net_handle, arin_net_payload
+                )
+                if arin_net_response:
+                    arin_net_response_payload = TicketedRequestPayload.from_xml(
+                        arin_net_response)
+
+                    prefix.custom_fields['RIR Handle'] = arin_net_response_payload.handle
+                    prefix.custom_fields['RIR registration date'] = arin_net_response_payload.registration_date
+                    prefix.custom_fields['RIR Net Name'] = arin_net_response_payload.net_name
+                    prefix.save()
 
 
 # config
@@ -468,11 +514,29 @@ def get_arin_parent_org_handle(obj):
         click.echo("NOT SET")
 
 
+@config_get.command(name='arin-origin-ases')
+@click.pass_obj
+def get_arin_origin_ases(obj):
+    if obj.arin_origin_ases:
+        click.echo(obj.arin_origin_ases)
+    else:
+        click.echo("NOT SET")
+
+
 @config_get.command(name='arin-api-key')
 @click.pass_obj
 def get_arin_api_key(obj):
     if obj.arin_api_key:
         click.echo(obj.arin_api_key)
+    else:
+        click.echo("NOT SET")
+
+
+@config_get.command(name='arin-uri')
+@click.pass_obj
+def get_arin_uri(obj):
+    if obj.arin_uri:
+        click.echo(obj.arin_uri)
     else:
         click.echo("NOT SET")
 
@@ -498,6 +562,14 @@ def config_set(obj):
 def set_netbox_uri(obj, value):
     obj.netbox_uri = value
     click.echo('netbox-uri set to: {}'.format(obj.netbox_uri))
+
+
+@config_set.command(name='arin-uri')
+@click.argument('value')
+@click.pass_obj
+def set_arin_uri(obj, value):
+    obj.arin_uri = value
+    click.echo('arin-uri set to: {}'.format(obj.arin_uri))
 
 
 @config_set.command(name='netbox-private-key-file')
@@ -526,6 +598,16 @@ def set_arin_parent_org_handle(obj, value):
     obj.arin_parent_org_handle = value
     click.echo(
         'arin-parent-org-handle set to: {}'.format(obj.arin_parent_org_handle)
+    )
+
+
+@config_set.command(name='arin-origin-ases')
+@click.argument('value')
+@click.pass_obj
+def set_arin_origin_ases(obj, value):
+    obj.arin_origin_ases = value
+    click.echo(
+        'arin-origin-ases set to: {}'.format(obj.arin_origin_ases)
     )
 
 

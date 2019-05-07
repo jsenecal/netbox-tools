@@ -1,1 +1,1 @@
-from .googlemaps import GeocodeResult
+from .googlemaps import GeocodeResult, GeocodeResultError

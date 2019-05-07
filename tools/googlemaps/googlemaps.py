@@ -1,4 +1,4 @@
-from .constants import USEFUL_TYPES, DEFAULT_TYPE
+from .constants import USEFUL_TYPES, DEFAULT_TYPES
 from pycountry import countries, subdivisions
 import logging
 logger = logging.getLogger(__name__)
@@ -9,18 +9,18 @@ class GeocodeResultError(ValueError):
 
 
 class GeocodeResult:
-    def __init__(self, geocode_result, expected_type=DEFAULT_TYPE):
+    def __init__(self, geocode_result, expected_types=DEFAULT_TYPES):
         self.raw = geocode_result
-        self.expected_type = expected_type
+        self.expected_types = expected_types
 
     @property
     def location(self):
         filtered_results = list(
-            result for result in self.raw if self.expected_type in result['types']
+            result for result in self.raw if set(result['types']).issubset(self.expected_types)
         )
         if len(filtered_results) == 0:
             raise GeocodeResultError(
-                'No valid location of the type %s' % self.expected_type)
+                'No valid location of the types %s' % self.expected_types)
         logger.debug(filtered_results)
         return filtered_results[0]
 

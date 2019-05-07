@@ -84,4 +84,4 @@ USEFUL_TYPES = (
     'street_number'
 )
 
-DEFAULT_TYPE = 'street_address'
+DEFAULT_TYPES = ['subpremise', 'premise', 'street_number', 'street_address']
