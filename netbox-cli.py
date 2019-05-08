@@ -443,6 +443,10 @@ def arin_reassign_simple(ctx, aggregate_id=None, prefix_id=None, replace_existin
                     prefix.custom_fields['RIR registration date'] = arin_net_response_payload.registration_date
                     prefix.custom_fields['RIR Net Name'] = arin_net_response_payload.net_name
                     prefix.save()
+                else:
+                    import ipdb; ipdb.set_trace()
+        else:
+            import ipdb; ipdb.set_trace()
 
 
 # config

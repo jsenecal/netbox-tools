@@ -352,19 +352,19 @@ class NetPayload(ArinPayload):
         return payload
 
 
-class PocLinkPayload:
-    """Poc Link Payload"""
+# class PocLinkPayload:
+#     """Poc Link Payload"""
 
-    def __init__(self, poc_handle, link_type):
-        valid_types = ['AD', 'AB', 'N', 'T']
-        if link_type not in valid_types:
-            raise PayloadException("Invalid link_type")
+#     def __init__(self, poc_handle, link_type):
+#         valid_types = ['AD', 'AB', 'N', 'T']
+#         if link_type not in valid_types:
+#             raise PayloadException("Invalid link_type")
 
-        self.poc_handle = poc_handle
-        self.link_type = link_type
+#         self.poc_handle = poc_handle
+#         self.link_type = link_type
 
-    def __str__(self):
-        return """<pocLinkRef xmlns="http://www.arin.net/regrws/core/v1" description="" handle="%s" function="%s"></pocLinkRef>""" % (self.poc_handle, self.link_type)
+#     def __str__(self):
+#         return """<pocLinkRef xmlns="http://www.arin.net/regrws/core/v1" description="" handle="%s" function="%s"></pocLinkRef>""" % (self.poc_handle, self.link_type)
 
 
 class TicketedRequestPayload(ArinPayload):
